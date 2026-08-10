@@ -132,10 +132,10 @@ export default function AdminUsersPage() {
                   Setujui sebagai Member
                 </button>
                 <button
-                  onClick={() => approveUser(p.id, 'brankas_people')}
+                  onClick={() => approveUser(p.id, 'admin')}
                   style={{ background: 'transparent', color: GOLD_BRIGHT, border: `1px solid ${LINE}`, borderRadius: 6, padding: '8px 14px', fontSize: 12, cursor: 'pointer' }}
                 >
-                  Setujui sebagai Brankas People
+                  Setujui sebagai Admin
                 </button>
               </div>
             </div>
