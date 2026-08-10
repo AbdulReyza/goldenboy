@@ -123,10 +123,10 @@ export default function KelolaShopPage() {
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: BG, display: 'flex', fontFamily: "'Inter', sans-serif" }}>
+    <div className="layout-container" style={{ background: BG, fontFamily: "'Inter', sans-serif" }}>
       <Sidebar />
 
-      <div style={{ flex: 1, color: TEXT, padding: '36px 44px' }}>
+      <div className="main-content" style={{ color: TEXT }}>
       <a href="/" style={{ fontSize: 12, color: TEXT_MUTED, textDecoration: 'none' }}>&larr; Kembali ke Inventory</a>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', margin: '12px 0 24px' }}>

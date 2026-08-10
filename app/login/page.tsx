@@ -298,7 +298,7 @@ export default function AuthPage() {
       </div>
       
       {/* Copyright text */}
-      <div style={{ position: 'absolute', bottom: 20, width: '100%', textAlign: 'center', color: TEXT_MUTED, fontSize: 11, letterSpacing: 1, zIndex: 10 }}>
+      <div style={{ position: 'absolute', bottom: 20, left: 0, right: 0, textAlign: 'center', color: '#F1EBDC', fontSize: 11, letterSpacing: 1, zIndex: 100, opacity: 0.6 }}>
         Hak Cipta Created By Violence And Sep
       </div>
     </div>
