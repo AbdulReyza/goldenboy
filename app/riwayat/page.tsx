@@ -21,7 +21,7 @@ type LogEntry = {
   after_value: number
   note: string | null
   items: { name: string } | null
-  profiles: { username: string } | null
+  profiles: { name: string, username: string } | null
 }
 
 function navItemStyle(active: boolean): React.CSSProperties {
@@ -69,7 +69,7 @@ export default function RiwayatPage() {
     async function fetchLogs() {
       let query = supabase
         .from('vault_logs')
-        .select('id, created_at, type, before_value, after_value, note, items(name), profiles(username)')
+        .select('id, created_at, type, before_value, after_value, note, items(name), profiles(name, username)')
         .order('created_at', { ascending: false })
         .limit(50)
       
@@ -153,7 +153,7 @@ export default function RiwayatPage() {
                 log.items?.name ?? 'Item'
               const isMoney = log.type !== 'item_update'
               
-              const username = log.profiles?.username ?? 'System'
+              const username = log.profiles?.name || log.profiles?.username || 'System'
               const initial = username.charAt(0).toUpperCase()
 
               return (
