@@ -57,25 +57,9 @@ export default function Sidebar() {
 
   return (
     <aside className="sidebar sidebar-container" style={{ display: 'flex', flexDirection: 'column', borderRight: `1px solid ${LINE}`, padding: '28px 20px', background: 'rgba(255,255,255,0.015)' }}>
-      <div className="sidebar-header" style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 40 }}>
-        <style>{`
-          @keyframes sidebar-spin {
-            from { transform: rotateY(0deg); }
-            to { transform: rotateY(180deg); }
-          }
-        `}</style>
-        <img 
-          src="/logo.png" 
-          alt="Golden Gang Logo" 
-          style={{ 
-            width: 48, 
-            height: 48, 
-            objectFit: 'contain',
-            animation: 'sidebar-spin 8s ease-in-out infinite alternate',
-            willChange: 'transform'
-          }} 
-        />
-        <span style={{ fontFamily: 'Georgia, serif', fontSize: 18, letterSpacing: 2, color: GOLD_BRIGHT }}>GOLDEN GANG</span>
+      <div className="sidebar-header" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 40 }}>
+        <div style={{ width: 8, height: 8, background: GOLD, borderRadius: '50%' }} />
+        <span style={{ fontFamily: 'Georgia, serif', fontSize: 15, letterSpacing: 2, color: GOLD_BRIGHT }}>GOLDEN GANG</span>
       </div>
       
       <nav className="responsive-nav" style={{ gap: 4, flex: 1 }}>
@@ -88,15 +72,16 @@ export default function Sidebar() {
             <a href="/admin/users" style={getNavItemStyle('/admin/users')}>Kelola Member</a>
             <a href="/kelola_barang" style={getNavItemStyle('/kelola_barang')}>Kelola Barang</a>
             <a href="/kelola_shop" style={getNavItemStyle('/kelola_shop')}>Kelola Shop</a>
+            <a href="/kelola_transaksi" style={getNavItemStyle('/kelola_transaksi')}>Kelola Transaksi</a>
           </>
         )}
       </nav>
 
       {profile && (
         <div className="sidebar-profile" style={{ marginTop: 'auto', paddingTop: 16, marginBottom: 24, borderTop: `1px solid ${LINE}` }}>
-          <a href="/profile" style={{ display: 'block', fontSize: 11, color: TEXT_MUTED, marginBottom: 8, whiteSpace: 'nowrap', textDecoration: 'none', cursor: 'pointer' }}>
+          <p style={{ fontSize: 11, color: TEXT_MUTED, marginBottom: 8, whiteSpace: 'nowrap' }}>
             @{profile.username} &middot; {profile.role}
-          </a>
+          </p>
           <button onClick={handleLogout} style={{ width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer', color: '#d97757', padding: '8px 0', fontSize: 13 }}>
             Keluar
           </button>

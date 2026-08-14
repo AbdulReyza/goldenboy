@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import Sidebar from '../components/Sidebar'
+import Sidebar from '@/app/components/Sidebar'
 
 const GOLD = '#C9A227'
 const GOLD_BRIGHT = '#F0CA6B'
@@ -13,33 +13,20 @@ const LINE = 'rgba(201,162,39,0.18)'
 const TEXT = '#F1EBDC'
 const TEXT_MUTED = '#8A8270'
 
-type Vault = { id: number; name: string; code: number; uang_merah: number; uang_putih: number }
+type Vault = { id: number; name: string; code: number }
 type Item = { id: number; name: string; category_name: string }
-type LogEntry = {
+type MyRequest = {
   id: number
   created_at: string
-  type: string
-  before_value: number
-  after_value: number
+  asset_type: string
+  action: string
+  amount: number
   note: string | null
+  status: string
   items: { name: string } | null
-  profiles: { username: string } | null
 }
 
 type AssetType = 'item' | 'uang_merah' | 'uang_putih'
-
-function navItemStyle(active: boolean): React.CSSProperties {
-  return {
-    padding: '10px 12px',
-    borderRadius: 6,
-    fontSize: 13,
-    color: active ? BG : TEXT_MUTED,
-    background: active ? GOLD : 'transparent',
-    fontWeight: active ? 600 : 400,
-    textDecoration: 'none',
-    display: 'block',
-  }
-}
 
 export default function TransaksiPage() {
   const router = useRouter()
@@ -49,7 +36,7 @@ export default function TransaksiPage() {
   const [vaults, setVaults] = useState<Vault[]>([])
   const [items, setItems] = useState<Item[]>([])
   const [categories, setCategories] = useState<string[]>([])
-  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [myRequests, setMyRequests] = useState<MyRequest[]>([])
 
   const [vaultId, setVaultId] = useState<number | null>(null)
   const [assetType, setAssetType] = useState<AssetType>('item')
@@ -82,12 +69,13 @@ export default function TransaksiPage() {
   }, [router])
 
   async function loadData() {
-    const [vaultRes, itemRes, logRes] = await Promise.all([
-      supabase.from('vaults').select('id, name, code, uang_merah, uang_putih').order('code'),
+    const [vaultRes, itemRes, reqRes] = await Promise.all([
+      supabase.from('vaults').select('id, name, code').order('code'),
       supabase.from('items').select('id, name, item_categories(name)').order('name'),
       supabase
-        .from('vault_logs')
-        .select('id, created_at, type, before_value, after_value, note, items(name), profiles(username)')
+        .from('transaction_requests')
+        .select('id, created_at, asset_type, action, amount, note, status, items(name)')
+        .eq('source', 'transaksi')
         .order('created_at', { ascending: false })
         .limit(15),
     ])
@@ -107,14 +95,13 @@ export default function TransaksiPage() {
       setCategories(cats)
       if (!category && cats.length > 0) setCategory(cats[0])
     }
-    if (logRes.data) setLogs(logRes.data as any)
+    if (reqRes.data) setMyRequests(reqRes.data as any)
   }
 
   useEffect(() => {
     if (!checking) loadData()
   }, [checking])
 
-  // Set item default begitu kategori berubah
   const itemsInCategory = items.filter((i) => i.category_name === category)
   useEffect(() => {
     if (itemsInCategory.length > 0 && !itemsInCategory.find((i) => i.id === itemId)) {
@@ -138,84 +125,24 @@ export default function TransaksiPage() {
 
     setSubmitting(true)
 
-    if (assetType === 'item') {
-      // --- Transaksi barang ---
-      const { data: existing } = await supabase
-        .from('vault_items')
-        .select('id, quantity')
-        .eq('vault_id', vaultId)
-        .eq('item_id', itemId)
-        .maybeSingle()
+    const { error } = await supabase.from('transaction_requests').insert({
+      user_id: userId,
+      vault_id: vaultId,
+      asset_type: assetType,
+      action,
+      item_id: assetType === 'item' ? itemId : null,
+      amount: qty,
+      note: note || null,
+      source: 'transaksi',
+    })
 
-      const currentQty = existing?.quantity ?? 0
-      const newQty = action === 'deposit' ? currentQty + qty : currentQty - qty
-
-      if (action === 'withdraw' && newQty < 0) {
-        setMessage({ type: 'error', text: `Stok tidak cukup. Stok saat ini: ${currentQty.toLocaleString('en-US')}.` })
-        setSubmitting(false)
-        return
-      }
-
-      const { error: upsertError } = await supabase
-        .from('vault_items')
-        .upsert({ vault_id: vaultId, item_id: itemId, quantity: newQty }, { onConflict: 'vault_id,item_id' })
-
-      if (upsertError) {
-        setMessage({ type: 'error', text: 'Gagal menyimpan: ' + upsertError.message })
-        setSubmitting(false)
-        return
-      }
-
-      const itemName = items.find((i) => i.id === itemId)?.name ?? ''
-      await supabase.from('vault_logs').insert({
-        vault_id: vaultId,
-        user_id: userId,
-        item_id: itemId,
-        type: 'item_update',
-        before_value: currentQty,
-        after_value: newQty,
-        note: `${action === 'deposit' ? 'Deposit' : 'Withdraw'} ${itemName}: ${note || '-'}`,
-      })
-    } else {
-      // --- Transaksi uang (merah / putih) ---
-      const vault = vaults.find((v) => v.id === vaultId)
-      if (!vault) {
-        setSubmitting(false)
-        return
-      }
-      const currentAmount = assetType === 'uang_merah' ? Number(vault.uang_merah) : Number(vault.uang_putih)
-      const newAmount = action === 'deposit' ? currentAmount + qty : currentAmount - qty
-
-      if (action === 'withdraw' && newAmount < 0) {
-        setMessage({ type: 'error', text: `Saldo tidak cukup. Saldo saat ini: $${currentAmount.toLocaleString('en-US')}.` })
-        setSubmitting(false)
-        return
-      }
-
-      const column = assetType === 'uang_merah' ? 'uang_merah' : 'uang_putih'
-      const { error: updateError } = await supabase
-        .from('vaults')
-        .update({ [column]: newAmount })
-        .eq('id', vaultId)
-
-      if (updateError) {
-        setMessage({ type: 'error', text: 'Gagal menyimpan: ' + updateError.message })
-        setSubmitting(false)
-        return
-      }
-
-      await supabase.from('vault_logs').insert({
-        vault_id: vaultId,
-        user_id: userId,
-        item_id: null,
-        type: assetType === 'uang_merah' ? 'uang_merah_update' : 'uang_putih_update',
-        before_value: currentAmount,
-        after_value: newAmount,
-        note: `${action === 'deposit' ? 'Deposit' : 'Withdraw'} ${assetType === 'uang_merah' ? 'Uang Merah' : 'Uang Putih'}: ${note || '-'}`,
-      })
+    if (error) {
+      setMessage({ type: 'error', text: 'Gagal mengajukan: ' + error.message })
+      setSubmitting(false)
+      return
     }
 
-    setMessage({ type: 'success', text: `${action === 'deposit' ? 'Deposit' : 'Withdraw'} berhasil.` })
+    setMessage({ type: 'success', text: 'Permintaan dikirim, menunggu persetujuan admin.' })
     setAmount('')
     setNote('')
     loadData()
@@ -243,16 +170,28 @@ export default function TransaksiPage() {
     boxSizing: 'border-box',
   }
 
+  function statusBadge(status: string) {
+    const map: Record<string, { color: string; label: string }> = {
+      pending: { color: '#e0a800', label: 'Menunggu' },
+      approved: { color: GOLD_BRIGHT, label: 'Disetujui' },
+      rejected: { color: '#d97757', label: 'Ditolak' },
+    }
+    const s = map[status] ?? map.pending
+    return <span style={{ fontSize: 10, color: s.color, border: `1px solid ${s.color}55`, borderRadius: 10, padding: '2px 8px' }}>{s.label}</span>
+  }
+
   return (
-    <div className="layout-container" style={{ background: BG, fontFamily: "'Inter', sans-serif" }}>
+    <div style={{ minHeight: '100vh', background: BG, display: 'flex', fontFamily: "'Inter', sans-serif" }}>
       <Sidebar />
 
-      <div className="main-content" style={{ color: TEXT }}>
-        <a href="/" style={{ fontSize: 12, color: TEXT_MUTED, textDecoration: 'none' }}>&larr; Kembali ke Ledger</a>
-        <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 26, fontWeight: 400, margin: '12px 0 28px', textAlign: 'center' }}>Transaksi</h1>
+      <div style={{ flex: 1, padding: '36px 44px', color: TEXT }}>
+        <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 26, fontWeight: 400, margin: '0 0 6px' }}>Transaksi</h1>
+        <p style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 24 }}>
+          Permintaan kamu akan diproses setelah disetujui admin.
+        </p>
 
-        <div style={{ display: 'flex', justifyContent: 'center' }}>
-          <form onSubmit={handleSubmit} style={{ flex: '1 1 340px', background: SURFACE, border: `1px solid ${LINE}`, borderRadius: 8, padding: 24, maxWidth: 420 }}>
+        <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
+          <form onSubmit={handleSubmit} style={{ flex: '1 1 340px', background: SURFACE, border: `1px solid ${LINE}`, borderRadius: 8, padding: 24, maxWidth: 380 }}>
             <label style={{ fontSize: 12, color: TEXT_MUTED, display: 'block', marginBottom: 6 }}>Brankas</label>
             <select value={vaultId ?? ''} onChange={(e) => setVaultId(Number(e.target.value))} style={inputStyle}>
               {vaults.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
@@ -325,9 +264,34 @@ export default function TransaksiPage() {
               disabled={submitting}
               style={{ width: '100%', background: submitting ? TEXT_MUTED : GOLD, color: BG, border: 'none', borderRadius: 6, padding: '12px 0', fontSize: 14, fontWeight: 600, cursor: submitting ? 'default' : 'pointer' }}
             >
-              {submitting ? 'Memproses...' : 'Konfirmasi Transaksi'}
+              {submitting ? 'Mengirim...' : 'Ajukan Transaksi'}
             </button>
           </form>
+
+          <div style={{ flex: '1 1 380px' }}>
+            <p style={{ fontSize: 11, letterSpacing: 2, color: TEXT_MUTED, marginBottom: 12 }}>PERMINTAAN SAYA</p>
+            <div style={{ border: `1px solid ${LINE}`, borderRadius: 8, overflow: 'hidden' }}>
+              {myRequests.length === 0 && <p style={{ padding: 20, fontSize: 13, color: TEXT_MUTED }}>Belum ada permintaan.</p>}
+              {myRequests.map((req) => {
+                const label =
+                  req.asset_type === 'uang_merah' ? 'Uang Merah' :
+                  req.asset_type === 'uang_putih' ? 'Uang Putih' :
+                  req.items?.name ?? 'Item'
+                return (
+                  <div key={req.id} style={{ padding: '12px 18px', borderBottom: `1px solid ${LINE}` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 13 }}>{req.action === 'deposit' ? '+' : '-'} {label}</span>
+                      {statusBadge(req.status)}
+                    </div>
+                    <p style={{ fontSize: 11, color: TEXT_MUTED, margin: '4px 0 0' }}>
+                      Jumlah: {Number(req.amount).toLocaleString('id-ID')} &middot; {new Date(req.created_at).toLocaleString('id-ID')}
+                    </p>
+                    {req.note && <p style={{ fontSize: 11, color: TEXT_MUTED, margin: '2px 0 0' }}>{req.note}</p>}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
         </div>
       </div>
     </div>

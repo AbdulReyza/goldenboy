@@ -24,11 +24,44 @@ type ShopItem = {
 }
 type CartLine = { itemId: number; name: string; price: number; qty: number; maxStock: number }
 
+type MyReqRow = {
+  id: number
+  batch_id: string
+  created_at: string
+  asset_type: string
+  action: string
+  amount: number
+  note: string | null
+  status: string
+  items: { name: string } | null
+}
+
+type MyOrder = {
+  batchId: string
+  createdAt: string
+  status: string
+  lines: { name: string; qty: number }[]
+  payment: { assetType: string; amount: number } | null
+}
+
+function statusBadge(status: string) {
+  const map: Record<string, { color: string; label: string }> = {
+    pending: { color: '#e0a800', label: 'Menunggu' },
+    approved: { color: GOLD_BRIGHT, label: 'Disetujui' },
+    rejected: { color: '#d97757', label: 'Ditolak' },
+  }
+  const s = map[status] ?? map.pending
+  return (
+    <span style={{ fontSize: 10, color: s.color, border: `1px solid ${s.color}55`, borderRadius: 10, padding: '2px 8px', whiteSpace: 'nowrap' }}>
+      {s.label}
+    </span>
+  )
+}
+
 export default function ShopPage() {
   const router = useRouter()
   const [checking, setChecking] = useState(true)
   const [userId, setUserId] = useState<string | null>(null)
-  const [role, setRole] = useState<string | null>(null)
 
   const [vaults, setVaults] = useState<Vault[]>([])
   const [vaultId, setVaultId] = useState<number | null>(null)
@@ -44,6 +77,8 @@ export default function ShopPage() {
   const [checkingOut, setCheckingOut] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
+  const [myOrders, setMyOrders] = useState<MyOrder[]>([])
+
   useEffect(() => {
     async function check() {
       const { data } = await supabase.auth.getSession()
@@ -51,14 +86,13 @@ export default function ShopPage() {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('is_approved, role')
+        .select('is_approved')
         .eq('id', data.session.user.id)
         .single()
 
       if (!profile || !profile.is_approved) return router.push('/')
 
       setUserId(data.session.user.id)
-      setRole(profile.role)
       setChecking(false)
     }
     check()
@@ -97,8 +131,44 @@ export default function ShopPage() {
     setLoading(false)
   }
 
+  // Ambil permintaan checkout milik user sendiri (source = 'shop'), lalu
+  // kelompokkan per batch_id supaya satu checkout tampil sebagai satu order.
+  async function loadMyOrders() {
+    const { data, error } = await supabase
+      .from('transaction_requests')
+      .select('id, batch_id, created_at, asset_type, action, amount, note, status, items(name)')
+      .eq('source', 'shop')
+      .order('created_at', { ascending: false })
+      .limit(50)
+
+    if (error || !data) return
+
+    const grouped: Record<string, MyOrder> = {}
+    for (const row of data as unknown as MyReqRow[]) {
+      if (!grouped[row.batch_id]) {
+        grouped[row.batch_id] = {
+          batchId: row.batch_id,
+          createdAt: row.created_at,
+          status: row.status,
+          lines: [],
+          payment: null,
+        }
+      }
+      if (row.asset_type === 'item') {
+        grouped[row.batch_id].lines.push({ name: row.items?.name ?? 'Item', qty: Number(row.amount) })
+      } else {
+        grouped[row.batch_id].payment = { assetType: row.asset_type, amount: Number(row.amount) }
+      }
+    }
+
+    setMyOrders(Object.values(grouped).slice(0, 10))
+  }
+
   useEffect(() => {
-    if (!checking) loadShop()
+    if (!checking) {
+      loadShop()
+      loadMyOrders()
+    }
   }, [checking, vaultId])
 
   const filteredItems = useMemo(() => {
@@ -138,57 +208,47 @@ export default function ShopPage() {
     setCheckingOut(true)
     setMessage(null)
 
-    for (const line of cart) {
-      const { data: existing } = await supabase
-        .from('vault_items')
-        .select('quantity')
-        .eq('vault_id', vaultId)
-        .eq('item_id', line.itemId)
-        .maybeSingle()
+    // Satu batch_id menandai semua baris ini berasal dari 1x checkout
+    const batchId = crypto.randomUUID()
 
-      const currentQty = existing?.quantity ?? 0
-      const newQty = currentQty - line.qty
+    // Baris permintaan pengeluaran barang (satu per item di keranjang)
+    const itemRows = cart.map((line) => ({
+      batch_id: batchId,
+      user_id: userId,
+      vault_id: vaultId,
+      asset_type: 'item',
+      action: 'withdraw',
+      item_id: line.itemId,
+      amount: line.qty,
+      note: `Shop: ${line.qty}x ${line.name} @ Rp${line.price.toLocaleString('id-ID')}`,
+      source: 'shop',
+    }))
 
-      if (newQty < 0) {
-        setMessage({ type: 'error', text: `Stok ${line.name} tidak cukup lagi. Muat ulang halaman.` })
-        setCheckingOut(false)
-        return
-      }
-
-      await supabase.from('vault_items').update({ quantity: newQty }).eq('vault_id', vaultId).eq('item_id', line.itemId)
-
-      await supabase.from('vault_logs').insert({
-        vault_id: vaultId,
-        user_id: userId,
-        item_id: line.itemId,
-        type: 'item_update',
-        before_value: currentQty,
-        after_value: newQty,
-        note: `Shop: dibeli ${line.qty}x ${line.name} seharga $${(line.price * line.qty).toLocaleString('en-US')}`,
-      })
+    // Satu baris permintaan pembayaran (uang masuk ke vault)
+    const paymentRow = {
+      batch_id: batchId,
+      user_id: userId,
+      vault_id: vaultId,
+      asset_type: payWith,
+      action: 'deposit',
+      item_id: null,
+      amount: total,
+      note: `Pembayaran shop (${cart.length} item)`,
+      source: 'shop',
     }
 
-    const { data: vault } = await supabase.from('vaults').select('uang_merah, uang_putih').eq('id', vaultId).single()
-    if (vault) {
-      const currentBalance = payWith === 'uang_merah' ? Number(vault.uang_merah) : Number(vault.uang_putih)
-      const newBalance = currentBalance + total
-      await supabase.from('vaults').update({ [payWith]: newBalance }).eq('id', vaultId)
+    const { error } = await supabase.from('transaction_requests').insert([...itemRows, paymentRow])
 
-      await supabase.from('vault_logs').insert({
-        vault_id: vaultId,
-        user_id: userId,
-        item_id: null,
-        type: payWith === 'uang_merah' ? 'uang_merah_update' : 'uang_putih_update',
-        before_value: currentBalance,
-        after_value: newBalance,
-        note: `Pembayaran shop dari member`,
-      })
+    if (error) {
+      setMessage({ type: 'error', text: 'Gagal mengajukan pesanan: ' + error.message })
+      setCheckingOut(false)
+      return
     }
 
-    setMessage({ type: 'success', text: 'Checkout berhasil! Barang sudah dikeluarkan dari brankas.' })
+    setMessage({ type: 'success', text: 'Pesanan diajukan! Menunggu persetujuan admin sebelum barang dikeluarkan.' })
     setCart([])
-    loadShop()
     setCheckingOut(false)
+    loadMyOrders()
   }
 
   if (checking || loading) {
@@ -210,17 +270,17 @@ export default function ShopPage() {
   }
 
   return (
-    <div className="layout-container" style={{ background: BG, fontFamily: "'Inter', sans-serif" }}>
+    <div style={{ minHeight: '100vh', background: BG, display: 'flex', fontFamily: "'Inter', sans-serif" }}>
       <Sidebar />
 
-      <div className="main-content" style={{ color: TEXT }}>
+      <div style={{ flex: 1, padding: '36px 44px', color: TEXT }}>
         <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 28, fontWeight: 400, marginBottom: 6 }}>Shop</h1>
         <p style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 28 }}>
-          Pilih barang dari brankas, checkout, stok otomatis berkurang.
+          Pilih barang, checkout, tunggu diproses admin.
         </p>
 
         <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
-          <div style={{ flex: '1 1 300px' }}>
+          <div style={{ flex: '2 1 500px' }}>
             <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
               <input
                 type="text"
@@ -255,7 +315,7 @@ export default function ShopPage() {
                       Stok: {item.stock.toLocaleString('id-ID')}
                     </p>
                     <p style={{ fontSize: 16, fontWeight: 700, color: GOLD_BRIGHT, marginBottom: 10 }}>
-                      ${item.price.toLocaleString('en-US')}
+                      Rp{item.price.toLocaleString('id-ID')}
                     </p>
                     <button
                       onClick={() => addToCart(item)}
@@ -272,7 +332,37 @@ export default function ShopPage() {
                   </div>
                 )
               })}
-              {filteredItems.length === 0 && <p style={{ color: TEXT_MUTED, gridColumn: '1 / -1' }}>Tidak ada barang ditemukan.</p>}
+              {filteredItems.length === 0 && <p style={{ color: TEXT_MUTED, gridColumn: '1 / -1' }}>Belum ada barang yang dijual. Hubungi admin.</p>}
+            </div>
+
+            {/* Permintaan Saya */}
+            <div style={{ marginTop: 40 }}>
+              <p style={{ fontSize: 11, letterSpacing: 2, color: TEXT_MUTED, marginBottom: 12 }}>PERMINTAAN SAYA</p>
+              <div style={{ border: `1px solid ${LINE}`, borderRadius: 8, overflow: 'hidden' }}>
+                {myOrders.length === 0 && <p style={{ padding: 20, fontSize: 13, color: TEXT_MUTED }}>Belum ada permintaan checkout.</p>}
+                {myOrders.map((order) => (
+                  <div key={order.batchId} style={{ padding: '12px 18px', borderBottom: `1px solid ${LINE}` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>
+                        {order.lines.length} item{order.lines.length > 1 ? '' : ''}
+                        {order.payment && (
+                          <span style={{ color: TEXT_MUTED, fontWeight: 400 }}>
+                            {' '}
+                            &middot; Rp{order.payment.amount.toLocaleString('id-ID')} ({order.payment.assetType === 'uang_merah' ? 'Uang Merah' : 'Uang Putih'})
+                          </span>
+                        )}
+                      </span>
+                      {statusBadge(order.status)}
+                    </div>
+                    <p style={{ fontSize: 11, color: TEXT_MUTED, margin: '0 0 4px' }}>
+                      {new Date(order.createdAt).toLocaleString('id-ID')}
+                    </p>
+                    <p style={{ fontSize: 12, color: TEXT_MUTED, margin: 0 }}>
+                      {order.lines.map((l) => `${l.qty}x ${l.name}`).join(', ')}
+                    </p>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -297,9 +387,9 @@ export default function ShopPage() {
                       onChange={(e) => updateQty(line.itemId, Number(e.target.value))}
                       style={{ ...inputStyle, width: 60, padding: '4px 8px' }}
                     />
-                    <span style={{ fontSize: 12, color: TEXT_MUTED }}>x ${line.price.toLocaleString('en-US')}</span>
+                    <span style={{ fontSize: 12, color: TEXT_MUTED }}>x Rp{line.price.toLocaleString('id-ID')}</span>
                     <span style={{ marginLeft: 'auto', fontSize: 13, color: GOLD_BRIGHT, fontFamily: 'monospace' }}>
-                      ${(line.price * line.qty).toLocaleString('en-US')}
+                      Rp{(line.price * line.qty).toLocaleString('id-ID')}
                     </span>
                   </div>
                 </div>
@@ -309,7 +399,7 @@ export default function ShopPage() {
                 <>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, fontSize: 14, fontWeight: 700 }}>
                     <span>Total</span>
-                    <span style={{ color: GOLD_BRIGHT, fontFamily: 'monospace' }}>${total.toLocaleString('en-US')}</span>
+                    <span style={{ color: GOLD_BRIGHT, fontFamily: 'monospace' }}>Rp{total.toLocaleString('id-ID')}</span>
                   </div>
 
                   <label style={{ fontSize: 11, color: TEXT_MUTED, display: 'block', marginBottom: 6 }}>Bayar dengan</label>
@@ -327,7 +417,7 @@ export default function ShopPage() {
                     disabled={checkingOut}
                     style={{ width: '100%', background: checkingOut ? TEXT_MUTED : GOLD, color: BG, border: 'none', borderRadius: 6, padding: '12px 0', fontSize: 14, fontWeight: 600, cursor: checkingOut ? 'default' : 'pointer' }}
                   >
-                    {checkingOut ? 'Memproses...' : 'Checkout'}
+                    {checkingOut ? 'Mengirim...' : 'Checkout'}
                   </button>
                 </>
               )}
