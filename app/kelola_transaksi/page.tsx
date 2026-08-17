@@ -27,6 +27,8 @@ type Req = {
   vault_id: number
   item_id: number | null
   user_id: string
+  holder_id: number | null
+  holder_name: string | null
   profiles: { username: string } | null
   items: { name: string, image_path: string | null } | null
   vaults: { name: string } | null
@@ -83,7 +85,7 @@ export default function KelolaTransaksiPage() {
     const { data, error } = await supabase
       .from('transaction_requests')
       .select(
-        'id, batch_id, created_at, asset_type, action, amount, note, status, source, vault_id, item_id, user_id, profiles!user_id(username), items(name, image_path), vaults(name)'
+        'id, batch_id, created_at, asset_type, action, amount, note, status, source, vault_id, item_id, user_id, holder_id, holder_name, profiles!user_id(username), items(name, image_path), vaults(name)'
       )
       .eq('status', 'pending')
       .order('created_at', { ascending: true })
@@ -146,6 +148,42 @@ export default function KelolaTransaksiPage() {
         before_value: currentQty,
         after_value: newQty,
         note: row.note,
+      })
+    } else if (row.asset_type === 'uang_putih' && row.holder_id) {
+      // --- Uang Putih dengan rekening spesifik ---
+      const { data: holder } = await supabase
+        .from('money_holders')
+        .select('amount')
+        .eq('id', row.holder_id)
+        .maybeSingle()
+
+      const currentAmount = Number(holder?.amount ?? 0)
+      const newAmount = row.action === 'deposit' ? currentAmount + Number(row.amount) : currentAmount - Number(row.amount)
+
+      if (newAmount < 0) {
+        throw new Error(`Saldo rekening ${row.holder_name ?? ''} tidak cukup (sisa ${currentAmount}).`)
+      }
+
+      await supabase.from('money_holders').update({ amount: newAmount }).eq('id', row.holder_id)
+
+      // Samakan total saldo Uang Putih vault dengan jumlah semua rekening
+      const { data: allHolders } = await supabase
+        .from('money_holders')
+        .select('amount')
+        .eq('vault_id', row.vault_id)
+        .eq('asset_type', 'uang_putih')
+
+      const totalPutih = (allHolders ?? []).reduce((s: number, h: any) => s + Number(h.amount), 0)
+      await supabase.from('vaults').update({ uang_putih: totalPutih }).eq('id', row.vault_id)
+
+      await supabase.from('vault_logs').insert({
+        vault_id: row.vault_id,
+        user_id: row.user_id,
+        item_id: null,
+        type: 'uang_putih_update',
+        before_value: currentAmount,
+        after_value: newAmount,
+        note: row.note ? `${row.note} (Rekening: ${row.holder_name ?? '-'})` : `Rekening: ${row.holder_name ?? '-'}`,
       })
     } else {
       const { data: vault } = await supabase.from('vaults').select('uang_merah, uang_putih').eq('id', row.vault_id).single()
@@ -455,6 +493,9 @@ export default function KelolaTransaksiPage() {
                             </span>
                           </div>
                           {row.note && <p style={{ fontSize: 11, color: TEXT_MUTED, margin: '2px 0 0' }}>{row.note}</p>}
+                          {row.holder_name && (
+                            <p style={{ fontSize: 11, color: GOLD_BRIGHT, margin: '2px 0 0' }}>Rekening: {row.holder_name}</p>
+                          )}
                         </div>
 
                         <span style={{ color: isDeposit ? GOLD_BRIGHT : RED, fontFamily: 'monospace', fontWeight: 700, fontSize: 14, flexShrink: 0 }}>

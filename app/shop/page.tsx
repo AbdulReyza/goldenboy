@@ -23,6 +23,7 @@ type ShopItem = {
   stock: number
 }
 type CartLine = { itemId: number; name: string; price: number; qty: number; maxStock: number }
+type Holder = { id: number; holder_name: string; amount: number }
 
 type MyReqRow = {
   id: number
@@ -33,6 +34,7 @@ type MyReqRow = {
   amount: number
   note: string | null
   status: string
+  holder_name: string | null
   items: { name: string } | null
 }
 
@@ -41,7 +43,7 @@ type MyOrder = {
   createdAt: string
   status: string
   lines: { name: string; qty: number }[]
-  payment: { assetType: string; amount: number } | null
+  payment: { assetType: string; amount: number; holderName: string | null } | null
 }
 
 function statusBadge(status: string) {
@@ -78,6 +80,10 @@ export default function ShopPage() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const [myOrders, setMyOrders] = useState<MyOrder[]>([])
+
+  // Daftar pemegang Uang Putih untuk brankas yang sedang dipilih
+  const [putihHolders, setPutihHolders] = useState<Holder[]>([])
+  const [holderId, setHolderId] = useState<number | null>(null)
 
   useEffect(() => {
     async function check() {
@@ -131,12 +137,27 @@ export default function ShopPage() {
     setLoading(false)
   }
 
+  // Rekening Uang Putih itu per-brankas, jadi ambil ulang tiap kali vaultId berubah
+  async function loadHolders() {
+    if (!vaultId) return
+    const { data } = await supabase
+      .from('money_holders')
+      .select('id, holder_name, amount')
+      .eq('vault_id', vaultId)
+      .eq('asset_type', 'uang_putih')
+      .order('id')
+
+    const list = (data ?? []) as Holder[]
+    setPutihHolders(list)
+    setHolderId(list.length > 0 ? list[0].id : null)
+  }
+
   // Ambil permintaan checkout milik user sendiri (source = 'shop'), lalu
   // kelompokkan per batch_id supaya satu checkout tampil sebagai satu order.
   async function loadMyOrders() {
     const { data, error } = await supabase
       .from('transaction_requests')
-      .select('id, batch_id, created_at, asset_type, action, amount, note, status, items(name)')
+      .select('id, batch_id, created_at, asset_type, action, amount, note, status, holder_name, items(name)')
       .eq('source', 'shop')
       .order('created_at', { ascending: false })
       .limit(50)
@@ -157,7 +178,7 @@ export default function ShopPage() {
       if (row.asset_type === 'item') {
         grouped[row.batch_id].lines.push({ name: row.items?.name ?? 'Item', qty: Number(row.amount) })
       } else {
-        grouped[row.batch_id].payment = { assetType: row.asset_type, amount: Number(row.amount) }
+        grouped[row.batch_id].payment = { assetType: row.asset_type, amount: Number(row.amount), holderName: row.holder_name }
       }
     }
 
@@ -169,6 +190,10 @@ export default function ShopPage() {
       loadShop()
       loadMyOrders()
     }
+  }, [checking, vaultId])
+
+  useEffect(() => {
+    if (!checking && vaultId) loadHolders()
   }, [checking, vaultId])
 
   const filteredItems = useMemo(() => {
@@ -202,9 +227,14 @@ export default function ShopPage() {
   }
 
   const total = cart.reduce((sum, c) => sum + c.price * c.qty, 0)
+  const selectedHolder = putihHolders.find((h) => h.id === holderId) ?? null
 
   async function handleCheckout() {
     if (!vaultId || cart.length === 0) return
+    if (payWith === 'uang_putih' && !holderId) {
+      setMessage({ type: 'error', text: 'Pilih nama penerima Uang Putih dulu.' })
+      return
+    }
     setCheckingOut(true)
     setMessage(null)
 
@@ -235,6 +265,8 @@ export default function ShopPage() {
       amount: total,
       note: `Pembayaran shop (${cart.length} item)`,
       source: 'shop',
+      holder_id: payWith === 'uang_putih' ? holderId : null,
+      holder_name: payWith === 'uang_putih' ? selectedHolder?.holder_name ?? null : null,
     }
 
     const { error } = await supabase.from('transaction_requests').insert([...itemRows, paymentRow])
@@ -344,11 +376,12 @@ export default function ShopPage() {
                   <div key={order.batchId} style={{ padding: '12px 18px', borderBottom: `1px solid ${LINE}` }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                       <span style={{ fontSize: 13, fontWeight: 600 }}>
-                        {order.lines.length} item{order.lines.length > 1 ? '' : ''}
+                        {order.lines.length} item
                         {order.payment && (
                           <span style={{ color: TEXT_MUTED, fontWeight: 400 }}>
                             {' '}
-                            &middot; Rp{order.payment.amount.toLocaleString('id-ID')} ({order.payment.assetType === 'uang_merah' ? 'Uang Merah' : 'Uang Putih'})
+                            &middot; Rp{order.payment.amount.toLocaleString('id-ID')} ({order.payment.assetType === 'uang_merah' ? 'Uang Merah' : 'Uang Putih'}
+                            {order.payment.holderName ? ` · ${order.payment.holderName}` : ''})
                           </span>
                         )}
                       </span>
@@ -403,10 +436,37 @@ export default function ShopPage() {
                   </div>
 
                   <label style={{ fontSize: 11, color: TEXT_MUTED, display: 'block', marginBottom: 6 }}>Bayar dengan</label>
-                  <select value={payWith} onChange={(e) => setPayWith(e.target.value as any)} style={{ ...inputStyle, width: '100%', marginBottom: 14, boxSizing: 'border-box' }}>
+                  <select
+                    value={payWith}
+                    onChange={(e) => setPayWith(e.target.value as any)}
+                    style={{ ...inputStyle, width: '100%', marginBottom: 14, boxSizing: 'border-box' }}
+                  >
                     <option value="uang_putih">Uang Putih</option>
                     <option value="uang_merah">Uang Merah</option>
                   </select>
+
+                  {payWith === 'uang_putih' && (
+                    <>
+                      <label style={{ fontSize: 11, color: TEXT_MUTED, display: 'block', marginBottom: 6 }}>Nama Penerima</label>
+                      {putihHolders.length === 0 ? (
+                        <p style={{ fontSize: 11, color: '#d97757', marginBottom: 14 }}>
+                          Belum ada rekening Uang Putih untuk brankas ini. Minta admin menambahkannya lewat "Lihat Rekening" di Vault Ledger.
+                        </p>
+                      ) : (
+                        <select
+                          value={holderId ?? ''}
+                          onChange={(e) => setHolderId(Number(e.target.value))}
+                          style={{ ...inputStyle, width: '100%', marginBottom: 14, boxSizing: 'border-box' }}
+                        >
+                          {putihHolders.map((h) => (
+                            <option key={h.id} value={h.id}>
+                              {h.holder_name} (Rp{h.amount.toLocaleString('id-ID')})
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </>
+                  )}
 
                   {message && (
                     <p style={{ fontSize: 12, marginBottom: 12, color: message.type === 'success' ? GOLD_BRIGHT : '#d97757' }}>{message.text}</p>

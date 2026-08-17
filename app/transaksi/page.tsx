@@ -15,6 +15,7 @@ const TEXT_MUTED = '#8A8270'
 
 type Vault = { id: number; name: string; code: number }
 type Item = { id: number; name: string; category_name: string }
+type Holder = { id: number; holder_name: string; amount: number }
 type MyRequest = {
   id: number
   created_at: string
@@ -23,6 +24,7 @@ type MyRequest = {
   amount: number
   note: string | null
   status: string
+  holder_name: string | null
   items: { name: string } | null
 }
 
@@ -49,6 +51,10 @@ export default function TransaksiPage() {
   const [submitting, setSubmitting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
+  // Daftar pemegang Uang Putih untuk brankas yang sedang dipilih
+  const [putihHolders, setPutihHolders] = useState<Holder[]>([])
+  const [holderId, setHolderId] = useState<number | null>(null)
+
   useEffect(() => {
     async function check() {
       const { data } = await supabase.auth.getSession()
@@ -74,7 +80,7 @@ export default function TransaksiPage() {
       supabase.from('items').select('id, name, item_categories(name)').order('name'),
       supabase
         .from('transaction_requests')
-        .select('id, created_at, asset_type, action, amount, note, status, items(name)')
+        .select('id, created_at, asset_type, action, amount, note, status, holder_name, items(name)')
         .eq('source', 'transaksi')
         .order('created_at', { ascending: false })
         .limit(15),
@@ -98,9 +104,28 @@ export default function TransaksiPage() {
     if (reqRes.data) setMyRequests(reqRes.data as any)
   }
 
+  // Rekening Uang Putih itu per-brankas, jadi ambil ulang tiap kali vaultId berubah
+  async function loadHolders() {
+    if (!vaultId) return
+    const { data } = await supabase
+      .from('money_holders')
+      .select('id, holder_name, amount')
+      .eq('vault_id', vaultId)
+      .eq('asset_type', 'uang_putih')
+      .order('id')
+
+    const list = (data ?? []) as Holder[]
+    setPutihHolders(list)
+    setHolderId(list.length > 0 ? list[0].id : null)
+  }
+
   useEffect(() => {
     if (!checking) loadData()
   }, [checking])
+
+  useEffect(() => {
+    if (!checking && vaultId) loadHolders()
+  }, [checking, vaultId])
 
   const itemsInCategory = items.filter((i) => i.category_name === category)
   useEffect(() => {
@@ -108,6 +133,8 @@ export default function TransaksiPage() {
       setItemId(itemsInCategory[0].id)
     }
   }, [category, items])
+
+  const selectedHolder = putihHolders.find((h) => h.id === holderId) ?? null
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -122,6 +149,10 @@ export default function TransaksiPage() {
       setMessage({ type: 'error', text: 'Pilih item dulu.' })
       return
     }
+    if (assetType === 'uang_putih' && !holderId) {
+      setMessage({ type: 'error', text: 'Pilih nama penerima Uang Putih dulu.' })
+      return
+    }
 
     setSubmitting(true)
 
@@ -134,6 +165,8 @@ export default function TransaksiPage() {
       amount: qty,
       note: note || null,
       source: 'transaksi',
+      holder_id: assetType === 'uang_putih' ? holderId : null,
+      holder_name: assetType === 'uang_putih' ? selectedHolder?.holder_name ?? null : null,
     })
 
     if (error) {
@@ -229,6 +262,25 @@ export default function TransaksiPage() {
               </>
             )}
 
+            {assetType === 'uang_putih' && (
+              <>
+                <label style={{ fontSize: 12, color: TEXT_MUTED, display: 'block', marginBottom: 6 }}>Nama Penerima</label>
+                {putihHolders.length === 0 ? (
+                  <p style={{ fontSize: 11, color: '#d97757', marginBottom: 16 }}>
+                    Belum ada rekening Uang Putih untuk brankas ini. Minta admin menambahkannya lewat "Lihat Rekening" di Vault Ledger.
+                  </p>
+                ) : (
+                  <select value={holderId ?? ''} onChange={(e) => setHolderId(Number(e.target.value))} style={inputStyle}>
+                    {putihHolders.map((h) => (
+                      <option key={h.id} value={h.id}>
+                        {h.holder_name} (Rp{h.amount.toLocaleString('id-ID')})
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </>
+            )}
+
             <label style={{ fontSize: 12, color: TEXT_MUTED, display: 'block', marginBottom: 6 }}>Jenis Transaksi</label>
             <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
               <button
@@ -280,7 +332,10 @@ export default function TransaksiPage() {
                 return (
                   <div key={req.id} style={{ padding: '12px 18px', borderBottom: `1px solid ${LINE}` }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: 13 }}>{req.action === 'deposit' ? '+' : '-'} {label}</span>
+                      <span style={{ fontSize: 13 }}>
+                        {req.action === 'deposit' ? '+' : '-'} {label}
+                        {req.holder_name ? ` · ${req.holder_name}` : ''}
+                      </span>
                       {statusBadge(req.status)}
                     </div>
                     <p style={{ fontSize: 11, color: TEXT_MUTED, margin: '4px 0 0' }}>

@@ -56,6 +56,182 @@ function Dial({ size = 56 }: { size?: number }) {
   )
 }
 
+function RekeningModal({
+  vaultId,
+  assetType,
+  assetLabel,
+  isAdmin,
+  onClose,
+  onChanged,
+}: {
+  vaultId: number
+  assetType: 'uang_putih'
+  assetLabel: string
+  isAdmin: boolean
+  onClose: () => void
+  onChanged: () => void
+}) {
+  const [holders, setHolders] = useState<{ id: number; holder_name: string; amount: number }[]>([])
+  const [loading, setLoading] = useState(true)
+  const [newName, setNewName] = useState('')
+  const [newAmount, setNewAmount] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  async function load() {
+    const { data } = await supabase
+      .from('money_holders')
+      .select('id, holder_name, amount')
+      .eq('vault_id', vaultId)
+      .eq('asset_type', assetType)
+      .order('id')
+    setHolders((data ?? []) as any)
+    setLoading(false)
+  }
+
+  // Samakan saldo Uang Putih di vault dengan total rekening
+  async function syncVaultBalance(currentHolders: { amount: number }[]) {
+    const sum = currentHolders.reduce((s, h) => s + Number(h.amount), 0)
+    await supabase.from('vaults').update({ [assetType]: sum }).eq('id', vaultId)
+    onChanged()
+  }
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  async function addHolder() {
+    if (!newName.trim() || !newAmount) return
+    setSaving(true)
+    await supabase.from('money_holders').insert({
+      vault_id: vaultId,
+      asset_type: assetType,
+      holder_name: newName.trim(),
+      amount: Number(newAmount),
+    })
+    setNewName('')
+    setNewAmount('')
+
+    const { data } = await supabase
+      .from('money_holders')
+      .select('id, holder_name, amount')
+      .eq('vault_id', vaultId)
+      .eq('asset_type', assetType)
+      .order('id')
+    const updated = (data ?? []) as any
+    setHolders(updated)
+    await syncVaultBalance(updated)
+    setSaving(false)
+  }
+
+  async function updateAmount(id: number, amount: number) {
+    await supabase.from('money_holders').update({ amount }).eq('id', id)
+
+    const { data } = await supabase
+      .from('money_holders')
+      .select('id, holder_name, amount')
+      .eq('vault_id', vaultId)
+      .eq('asset_type', assetType)
+      .order('id')
+    const updated = (data ?? []) as any
+    setHolders(updated)
+    await syncVaultBalance(updated)
+  }
+
+  async function removeHolder(id: number) {
+    await supabase.from('money_holders').delete().eq('id', id)
+
+    const { data } = await supabase
+      .from('money_holders')
+      .select('id, holder_name, amount')
+      .eq('vault_id', vaultId)
+      .eq('asset_type', assetType)
+      .order('id')
+    const updated = (data ?? []) as any
+    setHolders(updated)
+    await syncVaultBalance(updated)
+  }
+
+  const total = holders.reduce((s, h) => s + Number(h.amount), 0)
+
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100 }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 420, maxHeight: '80vh', overflowY: 'auto', background: '#0d0d0d', border: `1px solid ${LINE}`, borderRadius: 10, padding: 24 }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <p style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>Rekening {assetLabel}</p>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: TEXT_MUTED, fontSize: 18, cursor: 'pointer' }}>&times;</button>
+        </div>
+
+        {loading && <p style={{ color: TEXT_MUTED, fontSize: 13 }}>Memuat...</p>}
+
+        {!loading && holders.length === 0 && (
+          <p style={{ color: TEXT_MUTED, fontSize: 13, marginBottom: 16 }}>Belum ada rekening tercatat.</p>
+        )}
+
+        {!loading &&
+          holders.map((h) => (
+            <div key={h.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '8px 10px', background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
+              <span style={{ flex: 1, fontSize: 13 }}>{h.holder_name}</span>
+              {isAdmin ? (
+                <input
+                  type="number"
+                  defaultValue={h.amount}
+                  onBlur={(e) => updateAmount(h.id, Number(e.target.value))}
+                  style={{ width: 100, background: '#000', border: `1px solid ${LINE}`, borderRadius: 4, padding: '4px 8px', color: TEXT, fontSize: 12, outline: 'none' }}
+                />
+              ) : (
+                <span style={{ fontSize: 13, fontFamily: 'monospace', color: GOLD_BRIGHT }}>${Number(h.amount).toLocaleString('en-US')}</span>
+              )}
+              {isAdmin && (
+                <button onClick={() => removeHolder(h.id)} style={{ background: 'none', border: 'none', color: '#d97757', fontSize: 12, cursor: 'pointer' }}>
+                  Hapus
+                </button>
+              )}
+            </div>
+          ))}
+
+        {!loading && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 700, marginTop: 12, paddingTop: 12, borderTop: `1px solid ${LINE}` }}>
+            <span>Total Rekening</span>
+            <span style={{ color: GOLD_BRIGHT, fontFamily: 'monospace' }}>${total.toLocaleString('en-US')}</span>
+          </div>
+        )}
+
+        {isAdmin && (
+          <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+            <input
+              type="text"
+              placeholder="Nama orang"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              style={{ flex: 1, background: '#000', border: `1px solid ${LINE}`, borderRadius: 6, padding: '8px 10px', color: TEXT, fontSize: 12, outline: 'none' }}
+            />
+            <input
+              type="number"
+              placeholder="Jumlah"
+              value={newAmount}
+              onChange={(e) => setNewAmount(e.target.value)}
+              style={{ width: 100, background: '#000', border: `1px solid ${LINE}`, borderRadius: 6, padding: '8px 10px', color: TEXT, fontSize: 12, outline: 'none' }}
+            />
+            <button
+              onClick={addHolder}
+              disabled={saving}
+              style={{ background: GOLD, color: BG, border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+            >
+              Tambah
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function Screen({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ minHeight: '100vh', background: BG, color: TEXT, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', textAlign: 'center', padding: 20 }}>
@@ -76,6 +252,7 @@ export default function VaultLedgerPage() {
   const [loadingData, setLoadingData] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [imageTimestamp, setImageTimestamp] = useState(Date.now())
+  const [openRekening, setOpenRekening] = useState<'uang_putih' | null>(null)
 
   useEffect(() => {
     async function checkAuth() {
@@ -99,32 +276,33 @@ export default function VaultLedgerPage() {
 
   useEffect(() => {
     if (!profile || !profile.is_approved) return
-    async function fetchAll() {
-      const [vaultRes, itemRes] = await Promise.all([
-        supabase.from('vaults').select('*').order('code', { ascending: true }),
-        supabase.from('items').select(`id, name, image_path, item_categories ( name ), vault_items ( quantity, vaults ( name ) )`),
-      ])
-      if (vaultRes.error) return setError(vaultRes.error.message), setLoadingData(false)
-      if (itemRes.error) return setError(itemRes.error.message), setLoadingData(false)
-
-      setVaults(vaultRes.data as Vault[])
-      const mapped: ItemRow[] = (itemRes.data ?? []).map((row: any) => {
-        const vaultItems = row.vault_items ?? []
-        return {
-          id: row.id,
-          name: row.name,
-          image_path: row.image_path,
-          category_name: row.item_categories?.name ?? 'Item',
-          total_quantity: vaultItems.reduce((s: number, vi: any) => s + Number(vi.quantity), 0),
-          vaultNames: vaultItems.filter((vi: any) => Number(vi.quantity) > 0).map((vi: any) => vi.vaults?.name).filter(Boolean)
-        }
-      })
-      setItems(mapped)
-      setCategories(Array.from(new Set(mapped.map((i) => i.category_name))))
-      setLoadingData(false)
-    }
     fetchAll()
   }, [profile])
+
+  async function fetchAll() {
+    const [vaultRes, itemRes] = await Promise.all([
+      supabase.from('vaults').select('*').order('code', { ascending: true }),
+      supabase.from('items').select(`id, name, image_path, item_categories ( name ), vault_items ( quantity, vaults ( name ) )`),
+    ])
+    if (vaultRes.error) return setError(vaultRes.error.message), setLoadingData(false)
+    if (itemRes.error) return setError(itemRes.error.message), setLoadingData(false)
+
+    setVaults(vaultRes.data as Vault[])
+    const mapped: ItemRow[] = (itemRes.data ?? []).map((row: any) => {
+      const vaultItems = row.vault_items ?? []
+      return {
+        id: row.id,
+        name: row.name,
+        image_path: row.image_path,
+        category_name: row.item_categories?.name ?? 'Item',
+        total_quantity: vaultItems.reduce((s: number, vi: any) => s + Number(vi.quantity), 0),
+        vaultNames: vaultItems.filter((vi: any) => Number(vi.quantity) > 0).map((vi: any) => vi.vaults?.name).filter(Boolean)
+      }
+    })
+    setItems(mapped)
+    setCategories(Array.from(new Set(mapped.map((i) => i.category_name))))
+    setLoadingData(false)
+  }
 
   async function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>, itemId: number) {
     if (!e.target.files || e.target.files.length === 0) return
@@ -277,6 +455,14 @@ export default function VaultLedgerPage() {
                   <p style={{ fontFamily: "'Courier New', monospace", fontWeight: 700, fontSize: 34, color: TEXT, margin: 0 }}>
                     ${putihAnim.toLocaleString('en-US')}
                   </p>
+                  {vaults[0] && (
+                    <button
+                      onClick={() => setOpenRekening('uang_putih')}
+                      style={{ marginTop: 8, background: 'transparent', border: `1px solid ${LINE}`, color: GOLD_BRIGHT, borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}
+                    >
+                      Lihat Rekening
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -354,7 +540,6 @@ export default function VaultLedgerPage() {
                   {card.name.toUpperCase()}
                 </div>
 
-                {/* Kotak gambar - hover/klik di sini untuk edit, tanpa tombol terpisah */}
                 <div className="item-card-image" style={{ position: 'relative' }}>
                   {card.image_path ? (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -391,6 +576,17 @@ export default function VaultLedgerPage() {
           </div>
         </main>
       </div>
+
+      {openRekening && vaults[0] && (
+        <RekeningModal
+          vaultId={vaults[0].id}
+          assetType="uang_putih"
+          assetLabel="Uang Putih"
+          isAdmin={profile?.role === 'admin'}
+          onClose={() => setOpenRekening(null)}
+          onChanged={fetchAll}
+        />
+      )}
 
       <style jsx>{`
         .glow { position: absolute; border-radius: 50%; filter: blur(90px); pointer-events: none; z-index: 0; }
