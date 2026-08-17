@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '../components/Sidebar'
@@ -24,25 +24,13 @@ type LogEntry = {
   profiles: { name: string, username: string } | null
 }
 
-function navItemStyle(active: boolean): React.CSSProperties {
-  return {
-    padding: '10px 12px',
-    borderRadius: 6,
-    fontSize: 13,
-    color: active ? BG : TEXT_MUTED,
-    background: active ? GOLD : 'transparent',
-    fontWeight: active ? 600 : 400,
-    textDecoration: 'none',
-    display: 'block',
-  }
-}
-
 export default function RiwayatPage() {
   const router = useRouter()
   const [checking, setChecking] = useState(true)
   const [userId, setUserId] = useState<string | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [filter, setFilter] = useState<'semua' | 'saya'>('semua')
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     async function check() {
@@ -72,7 +60,7 @@ export default function RiwayatPage() {
         .select('id, created_at, type, before_value, after_value, note, items(name), profiles(name, username)')
         .order('created_at', { ascending: false })
         .limit(50)
-      
+
       if (filter === 'saya' && userId) {
         query = query.eq('user_id', userId)
       }
@@ -83,6 +71,26 @@ export default function RiwayatPage() {
 
     fetchLogs()
   }, [checking, filter, userId])
+
+  const filteredLogs = useMemo(() => {
+    if (!search.trim()) return logs
+    const q = search.toLowerCase()
+    return logs.filter((log) => {
+      const label =
+        log.type === 'uang_merah_update' ? 'uang merah' :
+        log.type === 'uang_putih_update' ? 'uang putih' :
+        (log.items?.name ?? 'item')
+      const username = (log.profiles?.name || log.profiles?.username || 'system').toLowerCase()
+      const note = (log.note ?? '').toLowerCase()
+
+      return (
+        label.toLowerCase().includes(q) ||
+        username.includes(q) ||
+        note.includes(q) ||
+        String(log.id).includes(q)
+      )
+    })
+  }, [logs, search])
 
   if (checking) {
     return (
@@ -98,27 +106,27 @@ export default function RiwayatPage() {
 
       <div className="main-content" style={{ color: TEXT }}>
         <a href="/" style={{ fontSize: 12, color: TEXT_MUTED, textDecoration: 'none' }}>&larr; Kembali ke Ledger</a>
-        
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16, margin: '12px 0 28px' }}>
           <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 26, fontWeight: 400, margin: 0 }}>Riwayat Transaksi</h1>
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${LINE}`, paddingBottom: 16, marginBottom: 24, flexWrap: 'wrap', gap: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${LINE}`, paddingBottom: 16, marginBottom: 16, flexWrap: 'wrap', gap: 16 }}>
           <div style={{ display: 'flex', gap: 24 }}>
-            <button 
+            <button
               onClick={() => setFilter('semua')}
               style={{ background: 'none', border: 'none', color: filter === 'semua' ? GOLD_BRIGHT : TEXT_MUTED, cursor: 'pointer', fontSize: 14, fontWeight: filter === 'semua' ? 600 : 400, paddingBottom: 6, borderBottom: filter === 'semua' ? `2px solid ${GOLD_BRIGHT}` : '2px solid transparent' }}
             >
               Semua Transaksi
             </button>
-            <button 
+            <button
               onClick={() => setFilter('saya')}
               style={{ background: 'none', border: 'none', color: filter === 'saya' ? GOLD_BRIGHT : TEXT_MUTED, cursor: 'pointer', fontSize: 14, fontWeight: filter === 'saya' ? 600 : 400, paddingBottom: 6, borderBottom: filter === 'saya' ? `2px solid ${GOLD_BRIGHT}` : '2px solid transparent' }}
             >
               Transaksi Saya
             </button>
           </div>
-          
+
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <div style={{ background: SURFACE, border: `1px solid ${LINE}`, borderRadius: 6, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 12, color: TEXT_MUTED }}>📅</span>
@@ -132,6 +140,28 @@ export default function RiwayatPage() {
           </div>
         </div>
 
+        {/* Kotak pencarian */}
+        <div style={{ marginBottom: 24 }}>
+          <input
+            type="text"
+            placeholder="Cari nama barang, username, catatan, atau ID transaksi..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              background: SURFACE,
+              border: `1px solid ${LINE}`,
+              borderRadius: 20,
+              padding: '10px 16px',
+              color: TEXT,
+              fontSize: 13,
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+        </div>
+
         <div style={{ width: '100%', overflowX: 'auto' }}>
           <div style={{ minWidth: 800 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '60px 200px 150px 120px 150px 1fr', gap: 16, padding: '16px 20px', background: 'rgba(255,255,255,0.01)', borderRadius: 8, marginBottom: 12, border: `1px solid ${LINE}` }}>
@@ -143,23 +173,27 @@ export default function RiwayatPage() {
               <span style={{ fontSize: 12, fontWeight: 600, color: TEXT_MUTED }}>Catatan</span>
             </div>
 
-            {logs.length === 0 && <p style={{ padding: 20, fontSize: 13, color: TEXT_MUTED, textAlign: 'center' }}>Belum ada transaksi.</p>}
-            
-            {logs.map((log) => {
+            {filteredLogs.length === 0 && (
+              <p style={{ padding: 20, fontSize: 13, color: TEXT_MUTED, textAlign: 'center' }}>
+                {search ? 'Tidak ada transaksi yang cocok dengan pencarian.' : 'Belum ada transaksi.'}
+              </p>
+            )}
+
+            {filteredLogs.map((log) => {
               const delta = log.after_value - log.before_value
               const label =
                 log.type === 'uang_merah_update' ? 'Uang Merah' :
                 log.type === 'uang_putih_update' ? 'Uang Putih' :
                 log.items?.name ?? 'Item'
               const isMoney = log.type !== 'item_update'
-              
+
               const username = log.profiles?.name || log.profiles?.username || 'System'
               const initial = username.charAt(0).toUpperCase()
 
               return (
                 <div key={log.id} style={{ display: 'grid', gridTemplateColumns: '60px 200px 150px 120px 150px 1fr', gap: 16, padding: '16px 20px', background: SURFACE, borderRadius: 8, marginBottom: 8, border: `1px solid rgba(255,255,255,0.02)`, alignItems: 'center' }}>
                   <span style={{ fontSize: 13, color: TEXT_MUTED }}>#{log.id}</span>
-                  
+
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <div style={{ width: 28, height: 28, borderRadius: '50%', background: GOLD, color: BG, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 'bold' }}>
                       {initial}

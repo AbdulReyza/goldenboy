@@ -28,7 +28,8 @@ type Req = {
   item_id: number | null
   user_id: string
   profiles: { username: string } | null
-  items: { name: string } | null
+  items: { name: string, image_path: string | null } | null
+  vaults: { name: string } | null
 }
 
 type Batch = {
@@ -41,6 +42,12 @@ type Batch = {
 
 function initials(name: string) {
   return (name || '?').slice(0, 1).toUpperCase()
+}
+
+function assetLabel(row: Req) {
+  if (row.asset_type === 'uang_merah') return 'Uang Merah'
+  if (row.asset_type === 'uang_putih') return 'Uang Putih'
+  return row.items?.name ?? 'Barang (tidak diketahui)'
 }
 
 export default function KelolaTransaksiPage() {
@@ -76,7 +83,7 @@ export default function KelolaTransaksiPage() {
     const { data, error } = await supabase
       .from('transaction_requests')
       .select(
-        'id, batch_id, created_at, asset_type, action, amount, note, status, source, vault_id, item_id, user_id, profiles!user_id(username), items(name)'
+        'id, batch_id, created_at, asset_type, action, amount, note, status, source, vault_id, item_id, user_id, profiles!user_id(username), items(name, image_path), vaults(name)'
       )
       .eq('status', 'pending')
       .order('created_at', { ascending: true })
@@ -167,7 +174,6 @@ export default function KelolaTransaksiPage() {
   }
 
   async function dismissBatch(batch: Batch) {
-    // efek keluar dulu (fade+collapse), baru dihapus dari state
     setLeavingBatch(batch.batchId)
     await new Promise((r) => setTimeout(r, 260))
     setBatches((prev) => prev.filter((b) => b.batchId !== batch.batchId))
@@ -291,26 +297,12 @@ export default function KelolaTransaksiPage() {
       <Sidebar />
 
       <div style={{ flex: 1, padding: '36px 44px', color: TEXT }}>
-        <div
-          style={{
-            marginBottom: 6,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-          }}
-        >
+        <div style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 12 }}>
           <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 26, fontWeight: 400, margin: 0 }}>Kelola Transaksi</h1>
           {!loading && batches.length > 0 && (
             <span
               className="kt-dot-pending"
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                color: BG,
-                background: GOLD,
-                borderRadius: 999,
-                padding: '2px 10px',
-              }}
+              style={{ fontSize: 11, fontWeight: 700, color: BG, background: GOLD, borderRadius: 999, padding: '2px 10px' }}
             >
               {batches.length} menunggu
             </span>
@@ -348,15 +340,7 @@ export default function KelolaTransaksiPage() {
         )}
 
         {!checking && !loading && batches.length === 0 && (
-          <div
-            style={{
-              border: `1px dashed ${LINE}`,
-              borderRadius: 10,
-              padding: '48px 20px',
-              textAlign: 'center',
-              animation: 'ktFadeInUp 380ms ease both',
-            }}
-          >
+          <div style={{ border: `1px dashed ${LINE}`, borderRadius: 10, padding: '48px 20px', textAlign: 'center', animation: 'ktFadeInUp 380ms ease both' }}>
             <p style={{ fontSize: 28, marginBottom: 8, opacity: 0.5 }}>✓</p>
             <p style={{ fontSize: 13, color: TEXT_MUTED, margin: 0 }}>Tidak ada permintaan yang menunggu.</p>
           </div>
@@ -368,29 +352,16 @@ export default function KelolaTransaksiPage() {
               <div
                 key={batch.batchId}
                 className={`kt-card${leavingBatch === batch.batchId ? ' kt-card-leaving' : ''}`}
-                style={{
-                  background: SURFACE,
-                  border: `1px solid ${LINE}`,
-                  borderRadius: 10,
-                  padding: 18,
-                  animationDelay: `${idx * 60}ms`,
-                }}
+                style={{ background: SURFACE, border: `1px solid ${LINE}`, borderRadius: 10, padding: 18, animationDelay: `${idx * 60}ms` }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <div
                       style={{
-                        width: 30,
-                        height: 30,
-                        borderRadius: '50%',
+                        width: 30, height: 30, borderRadius: '50%',
                         background: `linear-gradient(135deg, ${GOLD}, #7a5f14)`,
-                        color: BG,
-                        fontSize: 12,
-                        fontWeight: 700,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        flexShrink: 0,
+                        color: BG, fontSize: 12, fontWeight: 700,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                       }}
                     >
                       {initials(batch.username)}
@@ -413,7 +384,7 @@ export default function KelolaTransaksiPage() {
                         </span>
                       </p>
                       <p style={{ fontSize: 11, color: TEXT_MUTED, margin: '4px 0 0' }}>
-                        {new Date(batch.createdAt).toLocaleString('id-ID')}
+                        {new Date(batch.createdAt).toLocaleString('id-ID')} &middot; {batch.rows[0]?.vaults?.name ?? 'Brankas'}
                       </p>
                     </div>
                   </div>
@@ -423,38 +394,21 @@ export default function KelolaTransaksiPage() {
                       onClick={() => handleApprove(batch)}
                       disabled={processingBatch === batch.batchId}
                       style={{
-                        background: GOLD,
-                        color: BG,
-                        border: 'none',
-                        borderRadius: 6,
-                        padding: '8px 16px',
-                        fontSize: 12,
-                        fontWeight: 600,
+                        background: GOLD, color: BG, border: 'none', borderRadius: 6, padding: '8px 16px',
+                        fontSize: 12, fontWeight: 600,
                         cursor: processingBatch === batch.batchId ? 'default' : 'pointer',
                         opacity: processingBatch === batch.batchId ? 0.7 : 1,
                       }}
                     >
-                      {processingBatch === batch.batchId ? (
-                        <>
-                          <span className="kt-spinner" />
-                          Memproses...
-                        </>
-                      ) : (
-                        'Setujui'
-                      )}
+                      {processingBatch === batch.batchId ? (<><span className="kt-spinner" />Memproses...</>) : 'Setujui'}
                     </button>
                     <button
                       className="kt-btn kt-btn-reject"
                       onClick={() => handleReject(batch)}
                       disabled={processingBatch === batch.batchId}
                       style={{
-                        background: 'transparent',
-                        color: RED,
-                        border: `1px solid ${LINE}`,
-                        borderRadius: 6,
-                        padding: '8px 16px',
-                        fontSize: 12,
-                        cursor: processingBatch === batch.batchId ? 'default' : 'pointer',
+                        background: 'transparent', color: RED, border: `1px solid ${LINE}`, borderRadius: 6, padding: '8px 16px',
+                        fontSize: 12, cursor: processingBatch === batch.batchId ? 'default' : 'pointer',
                         opacity: processingBatch === batch.batchId ? 0.5 : 1,
                       }}
                     >
@@ -463,21 +417,48 @@ export default function KelolaTransaksiPage() {
                   </div>
                 </div>
 
-                <div style={{ borderTop: `1px solid ${LINE}`, paddingTop: 6 }}>
+                <div style={{ borderTop: `1px solid ${LINE}`, paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {batch.rows.map((row) => {
-                    const label =
-                      row.asset_type === 'uang_merah' ? 'Uang Merah' :
-                      row.asset_type === 'uang_putih' ? 'Uang Putih' :
-                      row.items?.name ?? 'Item'
+                    const label = assetLabel(row)
+                    const isDeposit = row.action === 'deposit'
                     return (
-                      <div
-                        key={row.id}
-                        className="kt-row"
-                        style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '6px 8px' }}
-                      >
-                        <span style={{ color: TEXT_MUTED }}>{row.note ?? label}</span>
-                        <span style={{ color: row.action === 'deposit' ? GOLD_BRIGHT : RED, fontFamily: 'monospace', fontWeight: 600 }}>
-                          {row.action === 'deposit' ? '+' : '-'}{Number(row.amount).toLocaleString('id-ID')}
+                      <div key={row.id} className="kt-row" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 8px' }}>
+                        <div
+                          style={{
+                            width: 32, height: 32, borderRadius: 6, background: BG,
+                            border: `1px solid ${LINE}`, flexShrink: 0,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+                          }}
+                        >
+                          {row.asset_type === 'item' && row.items?.image_path ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={row.items.image_path} alt={label} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          ) : (
+                            <span style={{ fontSize: 13, opacity: 0.5 }}>
+                              {row.asset_type === 'uang_merah' ? '💵' : row.asset_type === 'uang_putih' ? '💶' : '📦'}
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>{label}</span>
+                            <span
+                              style={{
+                                fontSize: 9, fontWeight: 700, letterSpacing: 0.5,
+                                color: isDeposit ? GOLD_BRIGHT : RED,
+                                border: `1px solid ${isDeposit ? 'rgba(201,162,39,0.4)' : 'rgba(217,119,87,0.4)'}`,
+                                borderRadius: 8, padding: '1px 6px',
+                              }}
+                            >
+                              {isDeposit ? 'DEPOSIT' : 'WITHDRAW'}
+                            </span>
+                          </div>
+                          {row.note && <p style={{ fontSize: 11, color: TEXT_MUTED, margin: '2px 0 0' }}>{row.note}</p>}
+                        </div>
+
+                        <span style={{ color: isDeposit ? GOLD_BRIGHT : RED, fontFamily: 'monospace', fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
+                          {isDeposit ? '+' : '-'}{Number(row.amount).toLocaleString('id-ID')}
                         </span>
                       </div>
                     )
@@ -490,4 +471,4 @@ export default function KelolaTransaksiPage() {
       </div>
     </div>
   )
-}   
+}
