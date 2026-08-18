@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/app/components/Sidebar'
+import GoldSelect from '@/app/components/GoldSelect'
 
 const GOLD = '#C9A227'
 const GOLD_BRIGHT = '#F0CA6B'
@@ -81,7 +82,6 @@ export default function ShopPage() {
 
   const [myOrders, setMyOrders] = useState<MyOrder[]>([])
 
-  // Daftar pemegang Uang Putih untuk brankas yang sedang dipilih
   const [putihHolders, setPutihHolders] = useState<Holder[]>([])
   const [holderId, setHolderId] = useState<number | null>(null)
 
@@ -137,7 +137,6 @@ export default function ShopPage() {
     setLoading(false)
   }
 
-  // Rekening Uang Putih itu per-brankas, jadi ambil ulang tiap kali vaultId berubah
   async function loadHolders() {
     if (!vaultId) return
     const { data } = await supabase
@@ -152,8 +151,6 @@ export default function ShopPage() {
     setHolderId(list.length > 0 ? list[0].id : null)
   }
 
-  // Ambil permintaan checkout milik user sendiri (source = 'shop'), lalu
-  // kelompokkan per batch_id supaya satu checkout tampil sebagai satu order.
   async function loadMyOrders() {
     const { data, error } = await supabase
       .from('transaction_requests')
@@ -238,10 +235,8 @@ export default function ShopPage() {
     setCheckingOut(true)
     setMessage(null)
 
-    // Satu batch_id menandai semua baris ini berasal dari 1x checkout
     const batchId = crypto.randomUUID()
 
-    // Baris permintaan pengeluaran barang (satu per item di keranjang)
     const itemRows = cart.map((line) => ({
       batch_id: batchId,
       user_id: userId,
@@ -254,7 +249,6 @@ export default function ShopPage() {
       source: 'shop',
     }))
 
-    // Satu baris permintaan pembayaran (uang masuk ke vault)
     const paymentRow = {
       batch_id: batchId,
       user_id: userId,
@@ -367,7 +361,6 @@ export default function ShopPage() {
               {filteredItems.length === 0 && <p style={{ color: TEXT_MUTED, gridColumn: '1 / -1' }}>Belum ada barang yang dijual. Hubungi admin.</p>}
             </div>
 
-            {/* Permintaan Saya */}
             <div style={{ marginTop: 40 }}>
               <p style={{ fontSize: 11, letterSpacing: 2, color: TEXT_MUTED, marginBottom: 12 }}>PERMINTAAN SAYA</p>
               <div style={{ border: `1px solid ${LINE}`, borderRadius: 8, overflow: 'hidden' }}>
@@ -436,14 +429,16 @@ export default function ShopPage() {
                   </div>
 
                   <label style={{ fontSize: 11, color: TEXT_MUTED, display: 'block', marginBottom: 6 }}>Bayar dengan</label>
-                  <select
-                    value={payWith}
-                    onChange={(e) => setPayWith(e.target.value as any)}
-                    style={{ ...inputStyle, width: '100%', marginBottom: 14, boxSizing: 'border-box' }}
-                  >
-                    <option value="uang_putih">Uang Putih</option>
-                    <option value="uang_merah">Uang Merah</option>
-                  </select>
+                  <div style={{ marginBottom: 14 }}>
+                    <GoldSelect
+                      value={payWith}
+                      onChange={(v) => setPayWith(v as 'uang_merah' | 'uang_putih')}
+                      options={[
+                        { value: 'uang_putih', label: 'Uang Putih' },
+                        { value: 'uang_merah', label: 'Uang Merah' },
+                      ]}
+                    />
+                  </div>
 
                   {payWith === 'uang_putih' && (
                     <>
@@ -453,17 +448,16 @@ export default function ShopPage() {
                           Belum ada rekening Uang Putih untuk brankas ini. Minta admin menambahkannya lewat "Lihat Rekening" di Vault Ledger.
                         </p>
                       ) : (
-                        <select
-                          value={holderId ?? ''}
-                          onChange={(e) => setHolderId(Number(e.target.value))}
-                          style={{ ...inputStyle, width: '100%', marginBottom: 14, boxSizing: 'border-box' }}
-                        >
-                          {putihHolders.map((h) => (
-                            <option key={h.id} value={h.id}>
-                              {h.holder_name} (Rp{h.amount.toLocaleString('id-ID')})
-                            </option>
-                          ))}
-                        </select>
+                        <div style={{ marginBottom: 14 }}>
+                          <GoldSelect
+                            value={holderId ? String(holderId) : ''}
+                            onChange={(v) => setHolderId(Number(v))}
+                            options={putihHolders.map((h) => ({
+                              value: String(h.id),
+                              label: `${h.holder_name} (Rp${h.amount.toLocaleString('id-ID')})`,
+                            }))}
+                          />
+                        </div>
                       )}
                     </>
                   )}

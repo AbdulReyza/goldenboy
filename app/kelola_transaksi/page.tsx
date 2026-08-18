@@ -148,67 +148,90 @@ export default function KelolaTransaksiPage() {
         before_value: currentQty,
         after_value: newQty,
         note: row.note,
+        source: row.source,
       })
-    } else if (row.asset_type === 'uang_putih' && row.holder_id) {
-      // --- Uang Putih dengan rekening spesifik ---
+      return
+    }
+
+    // --- Uang Putih dengan penerima terpilih -----------------------------
+    // Tabel money_holders sudah punya mekanisme sendiri: vaults.uang_putih
+    // SELALU disamakan dengan total seluruh rekening (lihat syncVaultBalance
+    // di modal "Lihat Rekening"). Jadi di sini kita TIDAK menambah/mengurangi
+    // vaults.uang_putih secara terpisah — cukup ubah nominal rekening orang
+    // yang dipilih, lalu hitung ulang total vault dari SISA rekening supaya
+    // tidak dobel-hitung dengan mekanisme sync yang sudah ada.
+    if (row.asset_type === 'uang_putih' && row.holder_id) {
       const { data: holder } = await supabase
         .from('money_holders')
         .select('amount')
         .eq('id', row.holder_id)
         .maybeSingle()
 
-      const currentAmount = Number(holder?.amount ?? 0)
-      const newAmount = row.action === 'deposit' ? currentAmount + Number(row.amount) : currentAmount - Number(row.amount)
-
-      if (newAmount < 0) {
-        throw new Error(`Saldo rekening ${row.holder_name ?? ''} tidak cukup (sisa ${currentAmount}).`)
+      if (!holder) {
+        throw new Error(`Rekening ${row.holder_name ?? 'penerima'} tidak ditemukan (mungkin sudah dihapus admin).`)
       }
 
-      await supabase.from('money_holders').update({ amount: newAmount }).eq('id', row.holder_id)
+      const currentHolderAmount = Number(holder.amount)
+      // deposit (uang MASUK ke vault) -> rekening yang dipilih adalah PENERIMA -> bertambah
+      // withdraw (uang KELUAR dari vault) -> uang diambil DARI rekening itu -> berkurang
+      const newHolderAmount =
+        row.action === 'deposit' ? currentHolderAmount + Number(row.amount) : currentHolderAmount - Number(row.amount)
 
-      // Samakan total saldo Uang Putih vault dengan jumlah semua rekening
+      if (newHolderAmount < 0) {
+        throw new Error(`Uang Putih milik ${row.holder_name ?? 'penerima'} tidak cukup (sisa ${currentHolderAmount}).`)
+      }
+
+      const { data: vaultBefore } = await supabase.from('vaults').select('uang_putih').eq('id', row.vault_id).single()
+      const beforeVaultTotal = Number(vaultBefore?.uang_putih ?? 0)
+
+      await supabase.from('money_holders').update({ amount: newHolderAmount }).eq('id', row.holder_id)
+
       const { data: allHolders } = await supabase
         .from('money_holders')
         .select('amount')
         .eq('vault_id', row.vault_id)
         .eq('asset_type', 'uang_putih')
 
-      const totalPutih = (allHolders ?? []).reduce((s: number, h: any) => s + Number(h.amount), 0)
-      await supabase.from('vaults').update({ uang_putih: totalPutih }).eq('id', row.vault_id)
+      const newVaultTotal = (allHolders ?? []).reduce((s, h: any) => s + Number(h.amount), 0)
+      await supabase.from('vaults').update({ uang_putih: newVaultTotal }).eq('id', row.vault_id)
 
       await supabase.from('vault_logs').insert({
         vault_id: row.vault_id,
         user_id: row.user_id,
         item_id: null,
         type: 'uang_putih_update',
-        before_value: currentAmount,
-        after_value: newAmount,
-        note: row.note ? `${row.note} (Rekening: ${row.holder_name ?? '-'})` : `Rekening: ${row.holder_name ?? '-'}`,
-      })
-    } else {
-      const { data: vault } = await supabase.from('vaults').select('uang_merah, uang_putih').eq('id', row.vault_id).single()
-      if (!vault) return
-
-      const currentBalance = row.asset_type === 'uang_merah' ? Number(vault.uang_merah) : Number(vault.uang_putih)
-      const newBalance = row.action === 'deposit' ? currentBalance + Number(row.amount) : currentBalance - Number(row.amount)
-
-      if (newBalance < 0) {
-        throw new Error(`Saldo ${row.asset_type === 'uang_merah' ? 'Uang Merah' : 'Uang Putih'} tidak cukup.`)
-      }
-
-      const column = row.asset_type
-      await supabase.from('vaults').update({ [column]: newBalance }).eq('id', row.vault_id)
-
-      await supabase.from('vault_logs').insert({
-        vault_id: row.vault_id,
-        user_id: row.user_id,
-        item_id: null,
-        type: row.asset_type === 'uang_merah' ? 'uang_merah_update' : 'uang_putih_update',
-        before_value: currentBalance,
-        after_value: newBalance,
+        before_value: beforeVaultTotal,
+        after_value: newVaultTotal,
         note: row.note,
+        source: row.source,
       })
+      return
     }
+
+    // --- Uang Merah, atau Uang Putih tanpa penerima (fallback lama) ------
+    const { data: vault } = await supabase.from('vaults').select('uang_merah, uang_putih').eq('id', row.vault_id).single()
+    if (!vault) return
+
+    const currentBalance = row.asset_type === 'uang_merah' ? Number(vault.uang_merah) : Number(vault.uang_putih)
+    const newBalance = row.action === 'deposit' ? currentBalance + Number(row.amount) : currentBalance - Number(row.amount)
+
+    if (newBalance < 0) {
+      throw new Error(`Saldo ${row.asset_type === 'uang_merah' ? 'Uang Merah' : 'Uang Putih'} tidak cukup.`)
+    }
+
+    const column = row.asset_type
+    await supabase.from('vaults').update({ [column]: newBalance }).eq('id', row.vault_id)
+
+    await supabase.from('vault_logs').insert({
+      vault_id: row.vault_id,
+      user_id: row.user_id,
+      item_id: null,
+      type: row.asset_type === 'uang_merah' ? 'uang_merah_update' : 'uang_putih_update',
+      before_value: currentBalance,
+      after_value: newBalance,
+      note: row.note,
+      source: row.source,
+    })
   }
 
   async function dismissBatch(batch: Batch) {
@@ -479,7 +502,7 @@ export default function KelolaTransaksiPage() {
                         </div>
 
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                             <span style={{ fontSize: 13, fontWeight: 600, color: TEXT }}>{label}</span>
                             <span
                               style={{
@@ -491,11 +514,20 @@ export default function KelolaTransaksiPage() {
                             >
                               {isDeposit ? 'DEPOSIT' : 'WITHDRAW'}
                             </span>
+                            {row.holder_name && (
+                              <span
+                                style={{
+                                  fontSize: 9, fontWeight: 600, letterSpacing: 0.3,
+                                  color: GOLD_BRIGHT,
+                                  border: `1px solid rgba(201,162,39,0.3)`,
+                                  borderRadius: 8, padding: '1px 6px',
+                                }}
+                              >
+                                {row.holder_name}
+                              </span>
+                            )}
                           </div>
                           {row.note && <p style={{ fontSize: 11, color: TEXT_MUTED, margin: '2px 0 0' }}>{row.note}</p>}
-                          {row.holder_name && (
-                            <p style={{ fontSize: 11, color: GOLD_BRIGHT, margin: '2px 0 0' }}>Rekening: {row.holder_name}</p>
-                          )}
                         </div>
 
                         <span style={{ color: isDeposit ? GOLD_BRIGHT : RED, fontFamily: 'monospace', fontWeight: 700, fontSize: 14, flexShrink: 0 }}>

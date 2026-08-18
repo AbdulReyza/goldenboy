@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/app/components/Sidebar'
+import GoldSelect from '@/app/components/GoldSelect'
 
 const GOLD = '#C9A227'
 const GOLD_BRIGHT = '#F0CA6B'
@@ -30,6 +31,23 @@ type MyRequest = {
 
 type AssetType = 'item' | 'uang_merah' | 'uang_putih'
 
+const PAKET_NARKO = [
+  { match: 'weed bag', label: 'Weed Bag', qty: 4 },
+  { match: 'meth bag', label: 'Meth Bag', qty: 2 },
+  { match: 'opium bag', label: 'Opium Bag', qty: 1 },
+  { match: 'cocain', label: 'Cocaine Bag', qty: 1 },
+]
+
+function statusBadge(status: string) {
+  const map: Record<string, { color: string; label: string }> = {
+    pending: { color: '#e0a800', label: 'Menunggu' },
+    approved: { color: GOLD_BRIGHT, label: 'Disetujui' },
+    rejected: { color: '#d97757', label: 'Ditolak' },
+  }
+  const s = map[status] ?? map.pending
+  return <span style={{ fontSize: 10, color: s.color, border: `1px solid ${s.color}55`, borderRadius: 10, padding: '2px 8px' }}>{s.label}</span>
+}
+
 export default function TransaksiPage() {
   const router = useRouter()
   const [checking, setChecking] = useState(true)
@@ -51,9 +69,11 @@ export default function TransaksiPage() {
   const [submitting, setSubmitting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
-  // Daftar pemegang Uang Putih untuk brankas yang sedang dipilih
   const [putihHolders, setPutihHolders] = useState<Holder[]>([])
   const [holderId, setHolderId] = useState<number | null>(null)
+
+  const [sendingPaket, setSendingPaket] = useState(false)
+  const [paketMessage, setPaketMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   useEffect(() => {
     async function check() {
@@ -104,7 +124,6 @@ export default function TransaksiPage() {
     if (reqRes.data) setMyRequests(reqRes.data as any)
   }
 
-  // Rekening Uang Putih itu per-brankas, jadi ambil ulang tiap kali vaultId berubah
   async function loadHolders() {
     if (!vaultId) return
     const { data } = await supabase
@@ -145,6 +164,10 @@ export default function TransaksiPage() {
       setMessage({ type: 'error', text: 'Isi jumlah dengan benar.' })
       return
     }
+    if (qty > 999999999999) {
+      setMessage({ type: 'error', text: 'Jumlah terlalu besar, cek lagi apakah kelebihan nol.' })
+      return
+    }
     if (assetType === 'item' && !itemId) {
       setMessage({ type: 'error', text: 'Pilih item dulu.' })
       return
@@ -170,7 +193,10 @@ export default function TransaksiPage() {
     })
 
     if (error) {
-      setMessage({ type: 'error', text: 'Gagal mengajukan: ' + error.message })
+      const friendlyError = error.message.toLowerCase().includes('numeric field overflow')
+        ? 'Jumlah terlalu besar, cek lagi apakah kelebihan nol.'
+        : 'Gagal mengajukan: ' + error.message
+      setMessage({ type: 'error', text: friendlyError })
       setSubmitting(false)
       return
     }
@@ -180,6 +206,53 @@ export default function TransaksiPage() {
     setNote('')
     loadData()
     setSubmitting(false)
+  }
+
+  async function handlePaketNarko() {
+    if (!vaultId) return
+    setPaketMessage(null)
+    setSendingPaket(true)
+
+    const batchId = crypto.randomUUID()
+    const rows: any[] = []
+    const notFound: string[] = []
+
+    for (const p of PAKET_NARKO) {
+      const found = items.find((i) => i.name.toLowerCase().includes(p.match))
+      if (!found) {
+        notFound.push(p.label)
+        continue
+      }
+      rows.push({
+        batch_id: batchId,
+        user_id: userId,
+        vault_id: vaultId,
+        asset_type: 'item',
+        action: 'withdraw',
+        item_id: found.id,
+        amount: p.qty,
+        note: `Paket Narko: ${p.qty}x ${found.name}`,
+        source: 'transaksi',
+      })
+    }
+
+    if (notFound.length > 0) {
+      setPaketMessage({ type: 'error', text: `Item tidak ditemukan di database: ${notFound.join(', ')}. Cek nama item di Buku Barang.` })
+      setSendingPaket(false)
+      return
+    }
+
+    const { error } = await supabase.from('transaction_requests').insert(rows)
+
+    if (error) {
+      setPaketMessage({ type: 'error', text: 'Gagal mengajukan paket: ' + error.message })
+      setSendingPaket(false)
+      return
+    }
+
+    setPaketMessage({ type: 'success', text: 'Paket Narko diajukan! Menunggu persetujuan admin.' })
+    loadData()
+    setSendingPaket(false)
   }
 
   if (checking) {
@@ -203,16 +276,6 @@ export default function TransaksiPage() {
     boxSizing: 'border-box',
   }
 
-  function statusBadge(status: string) {
-    const map: Record<string, { color: string; label: string }> = {
-      pending: { color: '#e0a800', label: 'Menunggu' },
-      approved: { color: GOLD_BRIGHT, label: 'Disetujui' },
-      rejected: { color: '#d97757', label: 'Ditolak' },
-    }
-    const s = map[status] ?? map.pending
-    return <span style={{ fontSize: 10, color: s.color, border: `1px solid ${s.color}55`, borderRadius: 10, padding: '2px 8px' }}>{s.label}</span>
-  }
-
   return (
     <div style={{ minHeight: '100vh', background: BG, display: 'flex', fontFamily: "'Inter', sans-serif" }}>
       <Sidebar />
@@ -222,6 +285,28 @@ export default function TransaksiPage() {
         <p style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 24 }}>
           Permintaan kamu akan diproses setelah disetujui admin.
         </p>
+
+        <div style={{ background: SURFACE, border: `1px solid ${LINE}`, borderRadius: 8, padding: '16px 20px', marginBottom: 28, maxWidth: 700 }}>
+          <p style={{ fontSize: 12, fontWeight: 600, color: GOLD_BRIGHT, marginBottom: 4 }}>PAKET CEPAT</p>
+          <p style={{ fontSize: 12, color: TEXT_MUTED, marginBottom: 12 }}>
+            Paket Narko: 4x Weed Bag, 2x Meth Bag, 1x Opium Bag, 1x Cocaine Bag (ambil sekaligus dari brankas terpilih di form kanan).
+          </p>
+          <button
+            onClick={handlePaketNarko}
+            disabled={sendingPaket || !vaultId}
+            style={{
+              background: sendingPaket ? TEXT_MUTED : GOLD, color: BG, border: 'none', borderRadius: 6,
+              padding: '10px 18px', fontSize: 13, fontWeight: 600, cursor: sendingPaket ? 'default' : 'pointer',
+            }}
+          >
+            {sendingPaket ? 'Mengirim...' : 'Ambil Paket Narko'}
+          </button>
+          {paketMessage && (
+            <p style={{ fontSize: 12, marginTop: 10, color: paketMessage.type === 'success' ? GOLD_BRIGHT : '#d97757' }}>
+              {paketMessage.text}
+            </p>
+          )}
+        </div>
 
         <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
           <form onSubmit={handleSubmit} style={{ flex: '1 1 340px', background: SURFACE, border: `1px solid ${LINE}`, borderRadius: 8, padding: 24, maxWidth: 380 }}>
@@ -270,13 +355,16 @@ export default function TransaksiPage() {
                     Belum ada rekening Uang Putih untuk brankas ini. Minta admin menambahkannya lewat "Lihat Rekening" di Vault Ledger.
                   </p>
                 ) : (
-                  <select value={holderId ?? ''} onChange={(e) => setHolderId(Number(e.target.value))} style={inputStyle}>
-                    {putihHolders.map((h) => (
-                      <option key={h.id} value={h.id}>
-                        {h.holder_name} (Rp{h.amount.toLocaleString('id-ID')})
-                      </option>
-                    ))}
-                  </select>
+                  <div style={{ marginBottom: 16 }}>
+                    <GoldSelect
+                      value={holderId ? String(holderId) : ''}
+                      onChange={(v) => setHolderId(Number(v))}
+                      options={putihHolders.map((h) => ({
+                        value: String(h.id),
+                        label: `${h.holder_name} (Rp${h.amount.toLocaleString('id-ID')})`,
+                      }))}
+                    />
+                  </div>
                 )}
               </>
             )}
