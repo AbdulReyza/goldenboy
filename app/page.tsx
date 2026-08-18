@@ -74,7 +74,6 @@ function RekeningModal({
   const [holders, setHolders] = useState<{ id: number; holder_name: string; amount: number }[]>([])
   const [loading, setLoading] = useState(true)
   const [newName, setNewName] = useState('')
-  const [newAmount, setNewAmount] = useState('')
   const [saving, setSaving] = useState(false)
 
   async function load() {
@@ -100,16 +99,15 @@ function RekeningModal({
   }, [])
 
   async function addHolder() {
-    if (!newName.trim() || !newAmount) return
+    if (!newName.trim()) return
     setSaving(true)
     await supabase.from('money_holders').insert({
       vault_id: vaultId,
       asset_type: assetType,
       holder_name: newName.trim(),
-      amount: Number(newAmount),
+      amount: 0, // Nominal otomatis 0 untuk penambahan nama baru
     })
     setNewName('')
-    setNewAmount('')
 
     const { data } = await supabase
       .from('money_holders')
@@ -121,20 +119,6 @@ function RekeningModal({
     setHolders(updated)
     await syncVaultBalance(updated)
     setSaving(false)
-  }
-
-  async function updateAmount(id: number, amount: number) {
-    await supabase.from('money_holders').update({ amount }).eq('id', id)
-
-    const { data } = await supabase
-      .from('money_holders')
-      .select('id, holder_name, amount')
-      .eq('vault_id', vaultId)
-      .eq('asset_type', assetType)
-      .order('id')
-    const updated = (data ?? []) as any
-    setHolders(updated)
-    await syncVaultBalance(updated)
   }
 
   async function removeHolder(id: number) {
@@ -177,16 +161,8 @@ function RekeningModal({
           holders.map((h) => (
             <div key={h.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '8px 10px', background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
               <span style={{ flex: 1, fontSize: 13 }}>{h.holder_name}</span>
-              {isAdmin ? (
-                <input
-                  type="number"
-                  defaultValue={h.amount}
-                  onBlur={(e) => updateAmount(h.id, Number(e.target.value))}
-                  style={{ width: 100, background: '#000', border: `1px solid ${LINE}`, borderRadius: 4, padding: '4px 8px', color: TEXT, fontSize: 12, outline: 'none' }}
-                />
-              ) : (
-                <span style={{ fontSize: 13, fontFamily: 'monospace', color: GOLD_BRIGHT }}>${Number(h.amount).toLocaleString('en-US')}</span>
-              )}
+              {/* Tampilan nominal angka yang sudah ada tetap utuh dan hanya dibaca (read-only) */}
+              <span style={{ fontSize: 13, fontFamily: 'monospace', color: GOLD_BRIGHT }}>${Number(h.amount).toLocaleString('en-US')}</span>
               {isAdmin && (
                 <button onClick={() => removeHolder(h.id)} style={{ background: 'none', border: 'none', color: '#d97757', fontSize: 12, cursor: 'pointer' }}>
                   Hapus
@@ -210,13 +186,6 @@ function RekeningModal({
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               style={{ flex: 1, background: '#000', border: `1px solid ${LINE}`, borderRadius: 6, padding: '8px 10px', color: TEXT, fontSize: 12, outline: 'none' }}
-            />
-            <input
-              type="number"
-              placeholder="Jumlah"
-              value={newAmount}
-              onChange={(e) => setNewAmount(e.target.value)}
-              style={{ width: 100, background: '#000', border: `1px solid ${LINE}`, borderRadius: 6, padding: '8px 10px', color: TEXT, fontSize: 12, outline: 'none' }}
             />
             <button
               onClick={addHolder}
